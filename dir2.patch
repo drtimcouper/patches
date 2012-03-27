@@ -1,0 +1,162 @@
+From 9d34dee41ef48dd4eaa889b8b8bcb616409336a4 Mon Sep 17 00:00:00 2001
+From: Tim Couper <drtimcouper@gmail.com>
+Date: Tue, 27 Mar 2012 14:44:04 +0100
+Subject: [PATCH] Changes to dir2 to remove duplicates
+ fix: put limit_to__all__ default to 0
+ fix: the doctest to reflect the new limit_to__all__
+
+---
+ IPython/core/completer.py        |    2 +-
+ IPython/core/magic.py            |    7 ++++
+ IPython/utils/dir2.py            |   57 ++++++++++++--------------------------
+ IPython/utils/tests/test_dir2.py |    9 +++--
+ 4 files changed, 31 insertions(+), 44 deletions(-)
+
+diff --git a/IPython/core/completer.py b/IPython/core/completer.py
+index da2a866..cb298c2 100644
+--- a/IPython/core/completer.py
++++ b/IPython/core/completer.py
+@@ -416,7 +416,7 @@ class IPCompleter(Completer):
+         When 0: nothing will be excluded.
+         """
+     )
+-    limit_to__all__ = Enum((0,1), default_value=1, config=True,
++    limit_to__all__ = Enum((0,1), default_value=0, config=True,
+         help="""Instruct the completer to use __all__ for the completion
+         
+         Specifically, when completing on ``object.<tab>``.
+diff --git a/IPython/core/magic.py b/IPython/core/magic.py
+index 4996c20..7165024 100644
+--- a/IPython/core/magic.py
++++ b/IPython/core/magic.py
+@@ -3753,6 +3753,13 @@ Defaulting color scheme to 'NoColor'"""
+                 Whether to merge completion results into a single list
+                 If False, only the completion results from the first non-empty completer
+                 will be returned.
++	        IPCompleter.limit_to__all__=<Enum>
++    	        Current: 0
++                Choices: (0, 1)
++                Instruct the completer to use __all__ for the completion
++                Specifically, when completing on ``object.<tab>``.
++                When 1: only those names in obj.__all__ will be included.
++                When 0 [default]: the values in the __all__ attribute are ignored
+             IPCompleter.greedy=<CBool>
+                 Current: False
+                 Activate greedy completion
+diff --git a/IPython/utils/dir2.py b/IPython/utils/dir2.py
+index 54d6cf6..818baad 100644
+--- a/IPython/utils/dir2.py
++++ b/IPython/utils/dir2.py
+@@ -19,7 +19,7 @@
+ 
+ def get_class_members(cls):
+     ret = dir(cls)
+-    if hasattr(cls,'__bases__'):
++    if hasattr(cls, '__bases__'):
+         try:
+             bases = cls.__bases__
+         except AttributeError:
+@@ -46,49 +46,28 @@ def dir2(obj):
+ 
+     # Start building the attribute list via dir(), and then complete it
+     # with a few extra special-purpose calls.
+-    words = dir(obj)
+ 
+-    if hasattr(obj,'__class__'):
+-        words.append('__class__')
+-        words.extend(get_class_members(obj.__class__))
+-    #if '__base__' in words: 1/0
++    words = set(dir(obj))
+ 
+-    # Some libraries (such as traits) may introduce duplicates, we want to
+-    # track and clean this up if it happens
+-    may_have_dupes = False
++    if hasattr(obj, '__class__'):
++        #words.add('__class__')
++        words |= set(get_class_members(obj.__class__))
+ 
+-    # this is the 'dir' function for objects with Enthought's traits
+-    if hasattr(obj, 'trait_names'):
+-        try:
+-            words.extend(obj.trait_names())
+-            may_have_dupes = True
+-        except TypeError:
+-            # This will happen if `obj` is a class and not an instance.
+-            pass
+-        except AttributeError:
+-            # `obj` lied to hasatter (e.g. Pyro), ignore
+-            pass
+-
+-    # Support for PyCrust-style _getAttributeNames magic method.
+-    if hasattr(obj, '_getAttributeNames'):
+-        try:
+-            words.extend(obj._getAttributeNames())
+-            may_have_dupes = True
+-        except TypeError:
+-            # `obj` is a class and not an instance.  Ignore
+-            # this error.
+-            pass
+-        except AttributeError:
+-            # `obj` lied to hasatter (e.g. Pyro), ignore
+-            pass
+ 
+-    if may_have_dupes:
+-        # eliminate possible duplicates, as some traits may also
+-        # appear as normal attributes in the dir() call.
+-        words = list(set(words))
+-        words.sort()
++    # for objects with Enthought's traits, add trait_names() list
++    # for PyCrust-style, add _getAttributeNames() magic method list
++    for attr in ('trait_names', '_getAttributeNames'):
++        if hasattr(obj, attr):
++            try:
++                func = getattr(obj, attr)
++                if callable(func):
++                    words |= set(func())
++            except:
++                # TypeError: obj is class not instance
++                pass
+ 
+     # filter out non-string attributes which may be stuffed by dir() calls
+     # and poor coding in third-party modules
+-    return [w for w in words if isinstance(w, basestring)]
+ 
++    words = [w for w in words if isinstance(w, basestring)]
++    return sorted(words)
+diff --git a/IPython/utils/tests/test_dir2.py b/IPython/utils/tests/test_dir2.py
+index c06e982..3d0ba61 100644
+--- a/IPython/utils/tests/test_dir2.py
++++ b/IPython/utils/tests/test_dir2.py
+@@ -13,8 +13,8 @@ def test_base():
+     assert ('z' in res)
+     assert ('y' not in res)
+     assert ('__class__' in res)
+-    nt.assert_equal(res.count('x'), 2)  # duplicates
+-    nt.assert_equal(res.count('__class__'), 4) # duplicates
++    nt.assert_equal(res.count('x'), 1)
++    nt.assert_equal(res.count('__class__'), 1)
+ 
+ def test_SubClass():
+ 
+@@ -23,8 +23,8 @@ def test_SubClass():
+ 
+     res = dir2(SubClass())
+     assert ('y' in res)
+-    nt.assert_equal(res.count('y'), 2) # duplicates,
+-    nt.assert_equal(res.count('x'), 3) # duplicates, but fewer than above!
++    nt.assert_equal(res.count('y'), 1)
++    nt.assert_equal(res.count('x'), 1)
+ 
+ 
+ def test_SubClass_with_trait_names_method():
+@@ -37,6 +37,7 @@ def test_SubClass_with_trait_names_method():
+     res = dir2(SubClass())
+     assert('trait_names' in res)
+     assert('umbrella' in res)
++    nt.assert_equal(res[-6:], ['t', 'trait_names','umbrella', 'x','y','z'])
+     nt.assert_equal(res.count('t'), 1)
+ 
+ 
+-- 
+1.7.1
+
